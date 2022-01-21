@@ -1,6 +1,6 @@
 import { dirname, relative } from '@stoplight/path';
 import { minimatch } from './utils/minimatch';
-import { Rule, StringifiedRule } from './rule/rule';
+import { Rule, StringifiedRule } from './rule';
 import {
   FileRulesetSeverityDefinition,
   ParserOptions,
@@ -9,12 +9,13 @@ import {
   RulesetOverridesDefinition,
 } from './types';
 import { assertValidRuleset } from './validation';
-import { Format } from './format';
 import { mergeRule } from './mergers/rules';
 import { DEFAULT_PARSER_OPTIONS, getDiagnosticSeverity } from '..';
 import { mergeRulesets } from './mergers/rulesets';
 import { isPlainObject, extractPointerFromRef, extractSourceFromRef } from '@stoplight/json';
 import { DiagnosticSeverity } from '@stoplight/types';
+import { FormatsSet } from './utils/formatsSet';
+import { isSimpleAliasDefinition } from './utils/guards';
 
 const STACK_SYMBOL = Symbol('@stoplight/spectral/ruleset/#stack');
 const DEFAULT_RULESET_FILE = /^\.?spectral\.(ya?ml|json|m?js)$/;
@@ -32,7 +33,7 @@ export type StringifiedRuleset = {
   extends: StringifiedRuleset[] | null;
   source: string | null;
   aliases: RulesetAliasesDefinition | null;
-  formats: string[] | null;
+  formats: FormatsSet | null;
   rules: Record<string, StringifiedRule>;
   overrides: RulesetOverridesDefinition | null;
   parserOptions: ParserOptions;
@@ -42,9 +43,10 @@ export class Ruleset {
   public readonly id = SEED++;
 
   protected readonly extends: Ruleset[] | null;
-  public readonly formats = new Set<Format>();
+  public readonly formats = new FormatsSet();
   public readonly overrides: RulesetOverridesDefinition | null;
   public readonly aliases: RulesetAliasesDefinition | null;
+  public readonly hasComplexAliases: boolean;
   public readonly rules: Record<string, Rule>;
   public readonly definition: RulesetDefinition;
 
@@ -69,7 +71,30 @@ export class Ruleset {
       ...context,
     };
 
-    this.aliases = definition.aliases === void 0 ? null : { ...definition.aliases };
+    let hasComplexAliases = false;
+    this.aliases =
+      definition.aliases === void 0
+        ? null
+        : Object.fromEntries(
+            Object.entries(definition.aliases).map(alias => {
+              const [name, value] = alias;
+
+              if (isSimpleAliasDefinition(value)) {
+                return alias;
+              }
+
+              hasComplexAliases = true;
+
+              const targets = value.targets.map(target => ({
+                formats: new FormatsSet(target.formats),
+                given: target.given,
+              }));
+
+              return [name, { ...value, targets }];
+            }),
+          );
+
+    this.hasComplexAliases = hasComplexAliases;
 
     const stack = context?.[STACK_SYMBOL] ?? new Map<RulesetDefinition, Ruleset>();
 
@@ -261,9 +286,10 @@ export class Ruleset {
             this.formats.add(format);
           }
         } else if (rule.owner !== this) {
-          rule.formats = rule.owner.definition.formats === void 0 ? null : new Set(rule.owner.definition.formats);
+          rule.formats =
+            rule.owner.definition.formats === void 0 ? null : new FormatsSet(rule.owner.definition.formats);
         } else if (this.definition.formats !== void 0) {
-          rule.formats = new Set(this.definition.formats);
+          rule.formats = new FormatsSet(this.definition.formats);
         }
 
         if (this.definition.documentationUrl !== void 0 && rule.documentationUrl === null) {
@@ -292,7 +318,7 @@ export class Ruleset {
       extends: this.extends,
       source: this.source,
       aliases: this.aliases,
-      formats: this.formats.size === 0 ? null : Array.from(this.formats).map(fn => fn.displayName ?? fn.name),
+      formats: this.formats.size === 0 ? null : this.formats,
       rules: this.rules,
       overrides: this.overrides,
       parserOptions: this.parserOptions,

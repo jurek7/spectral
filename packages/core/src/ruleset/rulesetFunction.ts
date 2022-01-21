@@ -2,7 +2,7 @@ import Ajv, { ErrorObject } from 'ajv';
 import addFormats from 'ajv-formats';
 import ajvErrors from 'ajv-errors';
 import type { RequiredError } from 'ajv/dist/vocabularies/validation/required';
-import type { AdditionalPropertiesError } from 'ajv/lib/vocabularies/applicator/additionalProperties';
+import type { AdditionalPropertiesError } from 'ajv/dist/vocabularies/applicator/additionalProperties';
 import type { EnumError } from 'ajv/dist/vocabularies/validation/enum';
 import type { JSONSchema7 } from 'json-schema';
 
@@ -11,7 +11,7 @@ import { printPath, PrintStyle, printValue } from '@stoplight/spectral-runtime';
 import { RulesetValidationError } from './validation';
 import { IFunctionResult, JSONSchema, RulesetFunction, RulesetFunctionWithValidator } from '../types';
 
-const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: true });
+const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: true, keywords: ['x-internal'] });
 ajvErrors(ajv);
 addFormats(ajv);
 
@@ -61,15 +61,33 @@ export class RulesetFunctionValidationError extends RulesetValidationError {
   }
 }
 
-type Schema = JSONSchema & { errorMessage?: string | { [key in keyof JSONSchema]: string } } & {
-  properties?: {
+type SchemaKeyedFragmentKeyword = 'properties' | 'patternProperties' | 'definitions';
+type SchemaFragmentKeyword = 'additionalItems' | 'propertyNames' | 'if' | 'then' | 'else' | 'not';
+type SchemaCompoundKeyword = 'allOf' | 'anyOf' | 'oneOf';
+
+type Schema = (
+  | (Omit<
+      JSONSchema,
+      SchemaKeyedFragmentKeyword | SchemaFragmentKeyword | SchemaCompoundKeyword | 'items' | 'dependencies'
+    > & {
+      'x-internal'?: boolean;
+      errorMessage?: string | { [key in keyof JSONSchema]: string };
+    })
+  | { 'x-internal': boolean }
+) & {
+  [key in SchemaKeyedFragmentKeyword]?: {
     [key: string]: SchemaDefinition;
   };
-  patternProperties?: {
-    [key: string]: SchemaDefinition;
-  };
+} & {
+  [key in SchemaFragmentKeyword]?: SchemaDefinition;
+} & {
+  [key in SchemaCompoundKeyword]?: SchemaDefinition[];
+} & {
+  items?: SchemaDefinition | SchemaDefinition[];
+  dependencies?: SchemaDefinition | string[];
 };
-type SchemaDefinition = Schema | boolean;
+
+export type SchemaDefinition = Schema | boolean;
 
 const DEFAULT_OPTIONS_VALIDATOR = (o: unknown): boolean => o === null;
 

@@ -23,6 +23,7 @@ import {
   oasDocumentSchema,
   oasOpSecurityDefined,
   oasSchema,
+  oasDiscriminator,
 } from './functions';
 
 export { ruleset as default };
@@ -30,13 +31,16 @@ export { ruleset as default };
 const ruleset = {
   documentationUrl: 'https://meta.stoplight.io/docs/spectral/docs/reference/openapi-rules.md',
   formats: [oas2, oas3, oas3_0, oas3_1],
+  aliases: {
+    PathItem: '$.paths[*]',
+    OperationObject: '#PathItem[get,put,post,delete,options,head,patch,trace]',
+  },
   rules: {
     'operation-success-response': {
       description: 'Operation must have at least one "2xx" or "3xx" response.',
       recommended: true,
       type: 'style',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'responses',
         function: oasOpSuccessResponse,
@@ -48,8 +52,7 @@ const ruleset = {
       recommended: true,
       formats: [oas2],
       type: 'validation',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         function: oasOpFormDataConsumeCheck,
       },
@@ -69,8 +72,7 @@ const ruleset = {
       message: '{{error}}',
       recommended: true,
       type: 'validation',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )].parameters",
+      given: '#OperationObject.parameters',
       then: {
         function: oasOpParams,
       },
@@ -185,7 +187,7 @@ const ruleset = {
       description: 'Markdown descriptions must not have "eval(".',
       recommended: true,
       type: 'style',
-      given: "$..[?(@property === 'description' || @property === 'title')]",
+      given: '$..[description,title]',
       then: {
         function: pattern,
         functionOptions: {
@@ -197,7 +199,7 @@ const ruleset = {
       description: 'Markdown descriptions must not have "<script>" tags.',
       recommended: true,
       type: 'style',
-      given: "$..[?(@property === 'description' || @property === 'title')]",
+      given: '$..[description,title]',
       then: {
         function: pattern,
         functionOptions: {
@@ -239,8 +241,7 @@ const ruleset = {
       description: 'Operation "description" must be present and non-empty string.',
       recommended: true,
       type: 'style',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'description',
         function: truthy,
@@ -250,8 +251,7 @@ const ruleset = {
       description: 'Operation must have "operationId".',
       recommended: true,
       type: 'style',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'operationId',
         function: truthy,
@@ -261,8 +261,7 @@ const ruleset = {
       message: 'operationId must not characters that are invalid when used in URL.',
       recommended: true,
       type: 'validation',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'operationId',
         function: pattern,
@@ -275,8 +274,7 @@ const ruleset = {
       description: 'Operation must not have more than a single tag.',
       recommended: false,
       type: 'style',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'tags',
         function: length,
@@ -289,8 +287,7 @@ const ruleset = {
       description: 'Operation must have non-empty "tags" array.',
       recommended: true,
       type: 'style',
-      given:
-        "$.paths[*][?( @property === 'get' || @property === 'put' || @property === 'post' || @property === 'delete' || @property === 'options' || @property === 'head' || @property === 'patch' || @property === 'trace' )]",
+      given: '#OperationObject',
       then: {
         field: 'tags',
         function: truthy,
@@ -400,6 +397,18 @@ const ruleset = {
         },
       },
     },
+    'oas2-discriminator': {
+      description: 'discriminator property must be defined and required',
+      recommended: true,
+      formats: [oas2],
+      severity: 0,
+      message: '{{error}}',
+      given: '$.definitions[?(@.discriminator)]',
+      type: 'validation',
+      then: {
+        function: oasDiscriminator,
+      },
+    },
     'oas2-host-not-example': {
       description: 'Host URL must not point at example.com.',
       recommended: false,
@@ -432,7 +441,7 @@ const ruleset = {
       description: 'Parameter objects must have "description".',
       recommended: false,
       formats: [oas2],
-      given: '$..parameters[?(@.in)]',
+      given: '$..parameters[?(@ && @.in)]',
       type: 'style',
       then: {
         field: 'description',
@@ -598,7 +607,11 @@ const ruleset = {
       recommended: false,
       formats: [oas3],
       type: 'style',
-      given: "$..[?(@parentProperty !== 'links' && @.parameters)]['parameters'].[?(@.in)]",
+      given: [
+        '#PathItem.parameters[?(@ && @.in)]',
+        '#OperationObject.parameters[?(@ && @.in)]',
+        '$.components.parameters[?(@ && @.in)]',
+      ],
       then: {
         field: 'description',
         function: truthy,

@@ -1,14 +1,16 @@
-import { JsonPath, Optional } from '@stoplight/types';
+import { isString } from 'lodash';
+import { DiagnosticSeverity, JsonPath, Optional } from '@stoplight/types';
 import { dirname, relative } from '@stoplight/path';
-import { DiagnosticSeverity } from '@stoplight/types';
 import { pathToPointer } from '@stoplight/json';
-
-import { getDiagnosticSeverity, DEFAULT_SEVERITY_LEVEL } from '../utils/severity';
-import { Ruleset } from '../ruleset';
-import { Format } from '../format';
-import { HumanReadableDiagnosticSeverity, IRuleThen, RuleDefinition } from '../types';
-import { minimatch } from '../utils/minimatch';
 import { printValue } from '@stoplight/spectral-runtime';
+
+import { DEFAULT_SEVERITY_LEVEL, getDiagnosticSeverity } from './utils/severity';
+import { Ruleset } from './ruleset';
+import { Format } from './format';
+import type { HumanReadableDiagnosticSeverity, IRuleThen, RuleDefinition, RulesetScopedAliasDefinition } from './types';
+import { minimatch } from './utils/minimatch';
+import { FormatsSet } from './utils/formatsSet';
+import { isSimpleAliasDefinition } from './utils/guards';
 
 const ALIAS = /^#([A-Za-z0-9_-]+)/;
 
@@ -27,7 +29,7 @@ export interface IRule {
 
 export type StringifiedRule = Omit<IRule, 'formats' | 'then'> & {
   name: string;
-  formats: string[] | null;
+  formats: FormatsSet | null;
   then: (Pick<IRuleThen, 'field'> & { function: string; functionOptions?: string })[];
   owner: number;
 };
@@ -37,7 +39,7 @@ export class Rule implements IRule {
   public message: string | null;
   #severity!: DiagnosticSeverity;
   public resolved: boolean;
-  public formats: Set<Format> | null;
+  public formats: FormatsSet | null;
   #enabled: boolean;
   public recommended: boolean;
   public documentationUrl: string | null;
@@ -56,7 +58,7 @@ export class Rule implements IRule {
     this.documentationUrl = definition.documentationUrl ?? null;
     this.severity = definition.severity;
     this.resolved = definition.resolved !== false;
-    this.formats = 'formats' in definition ? new Set(definition.formats) : null;
+    this.formats = 'formats' in definition ? new FormatsSet(definition.formats) : null;
     this.then = definition.then;
     this.given = definition.given;
   }
@@ -126,45 +128,96 @@ export class Rule implements IRule {
   }
 
   public get given(): string[] {
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    return this.#given.map(this.#resolveAlias, this);
+    return this.#given;
   }
 
   public set given(given: RuleDefinition['given']) {
-    this.#given = Array.isArray(given) ? given : [given];
+    const actualGiven = Array.isArray(given) ? given : [given];
+    this.#given = this.owner.hasComplexAliases
+      ? actualGiven
+      : actualGiven.flatMap(expr => this.#resolveAlias(expr, null)).filter(isString);
   }
 
-  #resolveAlias(this: Rule, expr: string): string {
-    let resolvedExpr = expr;
+  public getGivenForFormats(formats: Set<Format> | null): string[] {
+    return this.owner.hasComplexAliases ? this.#given.flatMap(expr => this.#resolveAlias(expr, formats)) : this.#given;
+  }
+
+  #resolveAlias(expr: string, formats: Set<Format> | null): string[] {
+    const expressions: string[] = [expr];
+    const resolvedExpressions = [];
 
     const stack = new Set<string>();
+    resolve: for (const expression of expressions) {
+      let resolvedExpr = expression;
 
-    while (resolvedExpr.startsWith('#')) {
-      const alias = ALIAS.exec(resolvedExpr)?.[1];
+      while (resolvedExpr.startsWith('#')) {
+        const alias = ALIAS.exec(resolvedExpr)?.[1];
 
-      if (alias === void 0 || alias === null) {
-        throw new ReferenceError(`"${this.name}" rule references an invalid alias`);
+        if (alias === void 0 || alias === null) {
+          throw new ReferenceError(`"${this.name}" rule references an invalid alias`);
+        }
+
+        if (stack.has(alias)) {
+          const _stack = [...stack, alias];
+          throw new ReferenceError(`Alias "${_stack[0]}" is circular. Resolution stack: ${_stack.join(' -> ')}`);
+        }
+
+        stack.add(alias);
+
+        if (this.owner.aliases === null || !(alias in this.owner.aliases)) {
+          throw new ReferenceError(`Alias "${alias}" does not exist`);
+        }
+
+        const aliasValue = this.owner.aliases[alias];
+        let actualAliasValue;
+        if (isSimpleAliasDefinition(aliasValue)) {
+          actualAliasValue = aliasValue;
+        } else {
+          actualAliasValue = Rule.#resolveAliasForFormats(aliasValue, formats);
+        }
+
+        if (actualAliasValue === null) {
+          continue resolve;
+        }
+
+        if (Array.isArray(actualAliasValue)) {
+          expressions.push(...actualAliasValue.map(item => item + resolvedExpr.slice(alias.length + 1)));
+          continue resolve;
+        }
+
+        if (actualAliasValue.length + 1 === expression.length) {
+          resolvedExpr = actualAliasValue;
+        } else {
+          resolvedExpr = actualAliasValue + resolvedExpr.slice(alias.length + 1);
+        }
       }
 
-      if (stack.has(alias)) {
-        const _stack = [...stack, alias];
-        throw new ReferenceError(`Alias "${_stack[0]}" is circular. Resolution stack: ${_stack.join(' -> ')}`);
-      }
+      stack.clear();
+      resolvedExpressions.push(resolvedExpr);
+    }
 
-      stack.add(alias);
+    return resolvedExpressions;
+  }
 
-      if (this.owner.aliases === null || !(alias in this.owner.aliases)) {
-        throw new ReferenceError(`Alias "${alias}" does not exist`);
-      }
+  static #resolveAliasForFormats(
+    { targets }: RulesetScopedAliasDefinition,
+    formats: Set<Format> | null,
+  ): string | string[] | null {
+    if (formats === null || formats.size === 0) {
+      return null;
+    }
 
-      if (alias.length + 1 === expr.length) {
-        resolvedExpr = this.owner.aliases[alias];
-      } else {
-        resolvedExpr = this.owner.aliases[alias] + resolvedExpr.slice(alias.length + 1);
+    // we start from the end to be consistent with overrides etc. - we generally tend to pick the "last" value.
+    for (let i = targets.length - 1; i >= 0; i--) {
+      const target = targets[i];
+      for (const format of target.formats) {
+        if (formats.has(format)) {
+          return target.given;
+        }
       }
     }
 
-    return resolvedExpr;
+    return null;
   }
 
   public matchesFormat(formats: Set<Format> | null): boolean {
@@ -199,13 +252,13 @@ export class Rule implements IRule {
       documentationUrl: this.documentationUrl,
       severity: this.severity,
       resolved: this.resolved,
-      formats: this.formats === null ? null : Array.from(this.formats).map(fn => fn.displayName ?? fn.name),
+      formats: this.formats,
       then: this.then.map(then => ({
         ...then.function,
         function: then.function.name,
         ...('functionOptions' in then ? { functionOptions: printValue(then.functionOptions) } : null),
       })),
-      given: this.#given,
+      given: Array.isArray(this.definition.given) ? this.definition.given : [this.definition.given],
       owner: this.owner.id,
     };
   }

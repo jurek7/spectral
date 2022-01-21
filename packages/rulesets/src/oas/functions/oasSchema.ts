@@ -1,5 +1,5 @@
 import type { SchemaObject, ErrorObject } from 'ajv';
-import * as traverse from 'json-schema-traverse';
+import traverse from 'json-schema-traverse';
 import { schema as schemaFn, SchemaOptions } from '@stoplight/spectral-functions';
 import { createRulesetFunction } from '@stoplight/spectral-core';
 import { oas2, oas3_1, extractDraftVersion, oas3_0 } from '@stoplight/spectral-formats';
@@ -37,11 +37,11 @@ export default createRulesetFunction<unknown, Options>(
 
     let { schema } = opts;
 
-    let dialect: SchemaOptions['dialect'];
+    let dialect: SchemaOptions['dialect'] = 'draft4';
     let prepareResults: SchemaOptions['prepareResults'];
 
     if (!formats) {
-      dialect = 'draft4';
+      dialect = 'auto';
     } else if (formats.has(oas3_1)) {
       if (isPlainObject(context.document.data) && typeof context.document.data.jsonSchemaDialect === 'string') {
         dialect =

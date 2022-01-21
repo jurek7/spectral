@@ -7,7 +7,7 @@ import { DiagnosticSeverity } from '@stoplight/types';
 import * as fetchMock from 'fetch-mock';
 
 import { migrateRuleset } from '..';
-import * as fixtures from './__fixtures__/.cache/index.json';
+import fixtures from './__fixtures__/.cache/index.json';
 
 const cwd = '/.tmp/spectral';
 
@@ -193,9 +193,9 @@ describe('migrator', () => {
           fs: fs as any,
           npmRegistry: 'https://unpkg.com/',
         }),
-      ).toEqual(`import {asyncapi} from "https://unpkg.com/@stoplight/spectral-rulesets";
-import {oas2} from "https://unpkg.com/@stoplight/spectral-formats";
+      ).toEqual(`import {oas2} from "https://unpkg.com/@stoplight/spectral-formats";
 import {truthy} from "https://unpkg.com/@stoplight/spectral-functions";
+import {asyncapi} from "https://unpkg.com/@stoplight/spectral-rulesets";
 export default {
   "extends": asyncapi,
   "formats": [oas2],
@@ -233,6 +233,43 @@ export default {
           npmRegistry: 'https://unpkg.com/',
         }),
       ).toEqual(`import customFunction from "/.tmp/spectral/functions/customFunction.js";
+export default {
+  "rules": {
+    "rule": {
+      "then": {
+        "given": "$",
+        "function": customFunction
+      }
+    }
+  }
+};
+`);
+    });
+
+    it('should not apply to custom functions living outside of cwd', async () => {
+      await fs.promises.writeFile(
+        path.join(cwd, 'custom-npm-provider-custom-functions.json'),
+        JSON.stringify({
+          functionsDir: '../fns',
+          functions: ['customFunction'],
+          rules: {
+            rule: {
+              then: {
+                given: '$',
+                function: 'customFunction',
+              },
+            },
+          },
+        }),
+      );
+
+      expect(
+        await migrateRuleset(path.join(cwd, 'custom-npm-provider-custom-functions.json'), {
+          format: 'esm',
+          fs: fs as any,
+          npmRegistry: 'https://unpkg.com/',
+        }),
+      ).toEqual(`import customFunction from "/.tmp/fns/customFunction.js";
 export default {
   "rules": {
     "rule": {
